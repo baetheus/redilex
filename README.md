@@ -1,10 +1,11 @@
 #redilex
-A naive redis orm with lexical indexing. This module was created to add a small amount of syntactical sugar to the node-redis client. It uses a model approach to managing hash objects within redis. Additionally, it has some simple hash property flags such as ```lexical```, ```mutable```, and ```seed``` that make creating and search for hashes a little easier.
+A naive redis orm with lexical indexing. This module was created to add a small amount of syntactical sugar to the node-redis client. It uses a model approach to managing hash objects within redis. Additionally, it has some simple hash property flags such as ```lexical```, ```mutable```, and ```seed``` that make creating and searching for hashes a little easier.
 
-## Basic Use
+## Installation
 
     npm install redilex
 
+## Basic Use
 
     var redilex = require('redilex');
 
