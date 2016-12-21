@@ -1,6 +1,6 @@
 {
   "name": "redilex",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "A naive redis orm with lexical indexing.",
   "main": "index.js",
   "repository": "https://github.com/baetheus/redilex.git",
