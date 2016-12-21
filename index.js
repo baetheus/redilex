@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 /*jslint node: true, nomen: true */
 'use strict';
 
@@ -32,9 +36,11 @@ function unmakeInd(value) {
 }
 
 function makeKey(name, id, sub) {
-    var key = sprintf('%s%s%s', name, SYMBOLS.sep, id);
+    var key;
     if (sub) {
         key = sprintf('%s%s%s%s%s', name, SYMBOLS.sep, sub, SYMBOLS.sep, id);
+    } else {
+        key = sprintf('%s%s%s', name, SYMBOLS.sep, id);
     }
     return key;
 }
@@ -88,6 +94,7 @@ function formatModel(model) {
         assert.bool(model[key].lexical, sprintf('model[%s].lexical', key));
         assert.bool(model[key].mutable, sprintf('model[%s].mutable', key));
     });
+    log.trace({model: model}, 'Formatted model.');
     return model;
 }
 
@@ -101,7 +108,7 @@ function formatHash(model, data, update) {
         }
         if (update && !model[key].mutable) { delete cleanHash[key]; }
     });
-
+    log.trace({hash: cleanHash}, 'Formatted hash for create or update.');
     return cleanHash;
 }
 
@@ -248,10 +255,12 @@ function createModel(model, options, client) {
     // Model definitions.
     function create(data, callback) {
         var image = createQuery(name, model, data);
+        log.trace({query: image.query}, 'Running create query.');
         multiexecimage(image, callback);
     }
 
     function remove(data, callback) {
+        log.trace({data: data}, 'Attempting to remove hashes.');
         async.waterfall([
             curry(multiexec)(getQuery(name, data)),
             curry(getToRemove)(name, model),
@@ -261,6 +270,7 @@ function createModel(model, options, client) {
 
     function update(data, callback) {
         data = data instanceof Array ? data : [data];
+        log.trace({data: data}, 'Attempting to update hashes.');
         async.waterfall([
             curry(multiexec)(getQuery(name, map(data, 'id'))),
             curry(getToUpdate)(name, model, data),
@@ -269,22 +279,25 @@ function createModel(model, options, client) {
     }
 
     function get(data, callback) {
+        log.trace({data: data}, 'Attempting to get hashes by id.');
         multiexec(getQuery(name, data), callback);
     }
 
-    function search(term, prop, callback) {
+    function search(field, term, callback) {
         var start = '[' + term;
         var end = start + '\xff';
-        var key = makeKey(name, prop, SYMBOLS.index);
+        var key = makeKey(name, field, SYMBOLS.index);
+        log.trace({term: term, field: field}, 'Attempting to search for hash ids.');
         async.waterfall([
             curry(zrangebylex)(key, start, end),
             parseSearch
         ], callback);
     }
 
-    function searchGet(term, prop, callback) {
+    function searchGet(field, term, callback) {
+        log.trace({term: term, field: field}, 'Attempting to search for hashes.');
         async.waterfall([
-            curry(search)(term, prop),
+            curry(search)(term, field),
             curry(searchToGet)(name),
             multiexec
         ], callback);
@@ -299,6 +312,7 @@ function createModel(model, options, client) {
         searchGet: searchGet
     };
 
+    log.trace('Creating new model.');
     return Object.freeze(that);
 }
 
