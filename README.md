@@ -23,7 +23,6 @@ var model = {
     },
     someField: {}
 };
-```
 
 var person = redilex.createModel(model, {name: 'person'});
 
@@ -31,6 +30,7 @@ person.create({name: 'Oscar'}, callback(err, res) {
     if (err) { return console.error(err); }
     console.log(res); // Will return a short uuid referencing the Oscar hash.
 });
+```
 
 ## Important Notes
 By default, redilex will add an *id* field and a *created* field. These fields can be overwritten by your model definition. The *id* field will be seeded with a random shortuuid provided by the shortid module. The *created* field will be seeded with the ```Date.now()``` function (a Unix timestamp).
