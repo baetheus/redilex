@@ -7,28 +7,30 @@ A naive redis orm with lexical indexing. This module was created to add a small 
 
 ## Basic Use
 
-    var redilex = require('redilex');
+```js
+var redilex = require('redilex');
 
-    var model = {
-        name: {
-            lexical: true
-        },
-        location: {
-            seed: 'Home',
-            mutable: true
-        },
-        randNumber: {
-            seed: Math.random
-        },
-        someField: {}
-    };
+var model = {
+    name: {
+        lexical: true
+    },
+    location: {
+        seed: 'Home',
+        mutable: true
+    },
+    randNumber: {
+        seed: Math.random
+    },
+    someField: {}
+};
+```
 
-    var person = redilex.createModel(model, {name: 'person'});
+var person = redilex.createModel(model, {name: 'person'});
 
-    person.create({name: 'Oscar'}, callback(err, res) {
-        if (err) { return console.error(err); }
-        console.log(res); // Will return a short uuid referencing the Oscar hash.
-    });
+person.create({name: 'Oscar'}, callback(err, res) {
+    if (err) { return console.error(err); }
+    console.log(res); // Will return a short uuid referencing the Oscar hash.
+});
 
 ## Important Notes
 By default, redilex will add an *id* field and a *created* field. These fields can be overwritten by your model definition. The *id* field will be seeded with a random shortuuid provided by the shortid module. The *created* field will be seeded with the ```Date.now()``` function (a Unix timestamp).
