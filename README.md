@@ -8,8 +8,28 @@ A naive redis orm with lexical indexing. This module was created to add a small 
 ## Basic Use
 
 ```js
+// Require the redilex module
 var redilex = require('redilex');
 
+/**
+ * Define the model for a hash.
+ *
+ * Redis hashes are a single level deep, so object values for fields aren't
+ * handled automatically. Keep it simple here. Each object key represents a
+ * redis hash field. Each field has three optional properties: seed, mutable,
+ * and lexical. Seed is a function, string, or number that is seeded as a
+ * default value on new hash creation (if a value is not supplied). Mutable
+ * is a boolean value that defines whether the field can be updated or not
+ * after creation (defaults to false). Lexical is a boolean value that defines
+ * whether the field should be lexicographically indexed (defaults to false).
+ *
+ * NOTE: redilex will automatically add an id and a created field to every
+ * model (if one is not defined). It is important that the id field is
+ * UNIQUE within a single model, as it's used to define the internal redis
+ * key of the hash. The id value can be replicated across different models,
+ * however, as each model is namespaced. Basically, seed the id field at your
+ * own peril.
+ */
 var model = {
     name: {
         lexical: true
@@ -24,12 +44,21 @@ var model = {
     someField: {}
 };
 
+// This is a helper function that simply prints an error or prints data.
+printPeople(err, data) {
+    if (err) { return console.error(err); }
+    console.log(data);
+}
+
+// Instantiate a new model object.
 var person = redilex.createModel(model, {name: 'person'});
 
-person.create({name: 'Oscar'}, callback(err, res) {
+// Create a new hash with a name of Oscar and print the stored hash.
+person.create({name: 'Oscar'}, function (err, res) {
     if (err) { return console.error(err); }
-    console.log(res); // Will return a short uuid referencing the Oscar hash.
+    person.get(res, printPeople);
 });
+
 ```
 
 ## Important Notes
