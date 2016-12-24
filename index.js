@@ -7,6 +7,7 @@
 
 var sprintf = require('util').format;
 
+var serialize = require('serialize-javascript');
 var async = require('vasync');
 var assert = require('assert-plus');
 var curry = require('lodash.curry');
@@ -172,6 +173,17 @@ function seedHashes(model, data) {
     return data.map(curry(seedHash)(model));
 }
 
+function serializeHash(model, data) {
+    var cleanHash = {};
+    Object.keys(model).forEach(function (key) {
+        if (typeof data[key] !== 'string' && typeof data[key] !== 'number') {
+            cleanHash[key] = serialize(data[key]);
+        } else {
+            cleanHash[key] = data[key];
+        }
+    });
+}
+
 /**
  * Query Primitive Generators
  */
@@ -224,6 +236,7 @@ function createQuery(name, model, data) {
     var query = [];
     data.forEach(function (hash) {
         ids.push(hash.id);
+        hash = serializeHash(hash);
         query.push.apply(query, hashAndIndex(name, model, hash));
     });
     return {query: query, ids: ids};
@@ -249,6 +262,7 @@ function updateQuery(name, model, data, oldData) {
     var query = [];
     data.forEach(function (hash, i) {
         ids.push(hash.id);
+        hash = serializeHash(hash);
         var oldHash = pruneObj(hash, oldData[i]);
         query.push.apply(query, hashAndIndex(name, model, hash));
         query.push.apply(query, multiIndex(name, model, oldHash, true));
