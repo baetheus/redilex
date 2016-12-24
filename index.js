@@ -12,13 +12,57 @@ var assert = require('assert-plus');
 var curry = require('lodash.curry');
 var map = require('lodash.map');
 var log = require('pino')({name: 'redilex'});
-
-var _ = curry.placeholder; // For placeholder during curry.
+var joi = require('joi');
 
 var SYMBOLS = {
     index: 'i',
     sep: ':'
 };
+
+var MODEL = {
+    id: {
+        seed: require('shortid').generate,
+        mutable: false,
+        lexical: false,
+    },
+    created: {
+        seed: Date.now,
+        mutable: false,
+        lexical: true,
+    }
+};
+
+/**
+ * Joi Schemas
+ */
+
+var propSchema = joi.object().keys({
+    seed: joi.func(),
+    mutable: joi.boolean().required(),
+    lexical: joi.boolean().required()
+});
+
+var searchSchema = joi.object().keys({
+    field: joi.string().required(),
+    term: joi.string().required(),
+    get: joi.boolean()
+});
+
+var arrStrSchema = joi.array().min(1).items(joi.string()).required();
+
+function createModelSchema(model, update) {
+    var schema = joi.object();
+    Object.keys(model).forEach(function (key) {
+        var obj = {};
+        if (!update || key === 'id') {
+            obj[key] = joi.any().required();
+        } else {
+            obj[key] = joi.any();
+        }
+        schema = schema.keys(obj);
+    });
+    return schema;
+}
 
 /**
  * Helper Functions
@@ -45,8 +89,13 @@ function makeKey(name, id, sub) {
     return key;
 }
 
-function makeProp(seed, mutable, lexical) {
-    return { seed: seed, mutable: mutable, lexical: lexical };
+function makeProp(seed, mutable, lexical, validate) {
+    return {
+        seed: seed,
+        mutable: mutable,
+        lexical: lexical,
+        validate: validate
+    };
 }
 
 function makeIndKeys(model) {
@@ -71,6 +120,12 @@ function setDefault(current, def) {
     return current;
 }
 
+function wrapArr(data) {
+    if (data instanceof Array) {
+        return data;
+    }
+    return [data];
+}
 
 /**
  * Formatting Functions
@@ -84,21 +139,23 @@ function formatSeed(seed) {
 }
 
 function formatModel(model) {
-    // Hard coded default seed functions for id and created.
-    model.id = model.id || makeProp(require('shortid').generate, false, false);
-    model.created = model.created || makeProp(Date.now, false, true);
-    Object.keys(model).forEach(function (key) {
-        if (model[key].seed) { model[key].seed = formatSeed(model[key].seed); }
-        model[key].mutable = setDefault(model[key].mutable, false);
-        model[key].lexical = setDefault(model[key].lexical, false);
-        assert.bool(model[key].lexical, sprintf('model[%s].lexical', key));
-        assert.bool(model[key].mutable, sprintf('model[%s].mutable', key));
+    var output = Object.assign({}, MODEL, model);
+    Object.keys(output).forEach(function (key) {
+        if (output[key].seed) {
+            output[key].seed = formatSeed(output[key].seed);
+        }
+        output[key].mutable = setDefault(output[key].mutable, false);
+        output[key].lexical = setDefault(output[key].lexical, false);
+        joi.validate(output[key], propSchema, function (err, value) {
+            if (err) { throw err; }
+            log.trace({value: value}, 'Clean model property.');
+        });
     });
-    log.trace({model: model}, 'Formatted model.');
-    return model;
+    log.trace({model: output}, 'Formatted model.');
+    return output;
 }
 
-function formatHash(model, data, update) {
+function seedHash(model, data) {
     var cleanHash = {};
     Object.keys(model).forEach(function (key) {
         if (data[key]) {
@@ -106,10 +163,13 @@ function formatHash(model, data, update) {
         } else if (model[key].seed) {
             cleanHash[key] = model[key].seed();
         }
-        if (update && !model[key].mutable) { delete cleanHash[key]; }
     });
-    log.trace({hash: cleanHash}, 'Formatted hash for create or update.');
+    log.trace({hash: cleanHash}, 'Seeded hash for create.');
     return cleanHash;
+}
+
+function seedHashes(model, data) {
+    return data.map(curry(seedHash)(model));
 }
 
 /**
@@ -160,11 +220,9 @@ function hashAndIndex(name, model, hash, remove) {
  * General Query Functions
  */
 function createQuery(name, model, data) {
-    data = data instanceof Array ? data : [data];
     var ids = [];
     var query = [];
     data.forEach(function (hash) {
-        hash = formatHash(model, hash);
         ids.push(hash.id);
         query.push.apply(query, hashAndIndex(name, model, hash));
     });
@@ -172,7 +230,6 @@ function createQuery(name, model, data) {
 }
 
 function removeQuery(name, model, data) {
-    data = data instanceof Array ? data : [data];
     var query = [];
     data.forEach(function (hash) {
         query.push.apply(query, hashAndIndex(name, model, hash, true));
@@ -190,12 +247,8 @@ function getQuery(name, data) {
 function updateQuery(name, model, data, oldData) {
     var ids = [];
     var query = [];
-    data = data instanceof Array ? data : [data];
     data.forEach(function (hash, i) {
-        // This could be cleaner..
         ids.push(hash.id);
-        hash = formatHash(model, hash, true);
-        hash.id = ids[i];
         var oldHash = pruneObj(hash, oldData[i]);
         query.push.apply(query, hashAndIndex(name, model, hash));
         query.push.apply(query, multiIndex(name, model, oldHash, true));
@@ -225,9 +278,11 @@ function searchToGet(name, data, callback) {
 
 /** Primary Export */
 function createModel(model, options, client) {
+    options = typeof options === 'string' ? {name: options} : options;
     var that = {};
     var opts = options || {};
     var name = opts.name;
+    var mSchema, uSchema, createSchema, updateSchema;
 
     assert.object(model, 'model');
     assert.object(opts, 'opts');
@@ -235,6 +290,12 @@ function createModel(model, options, client) {
 
     client = client || require('redis').createClient();
     model = formatModel(model);
+
+    // Create model schemas
+    mSchema = setDefault(opts.mSchema, createModelSchema(model));
+    uSchema = setDefault(opts.uSchema, createModelSchema(model, true));
+    createSchema = joi.array().min(1).items(mSchema).required();
+    updateSchema = joi.array().min(1).items(uSchema).required();
 
     // Wrap client functions so they can be curried.
     function multiexec(query, callback) {
@@ -254,12 +315,22 @@ function createModel(model, options, client) {
 
     // Model definitions.
     function create(data, callback) {
+        data = seedHashes(model, wrapArr(data));
+        var validate = createSchema.validate(data);
+        if (validate.error) {
+            return callback(validate.error);
+        }
         var image = createQuery(name, model, data);
         log.trace({query: image.query}, 'Running create query.');
         multiexecimage(image, callback);
     }
 
     function remove(data, callback) {
+        data = wrapArr(data);
+        var validate = arrStrSchema.validate(data);
+        if (validate.error) {
+            return callback(validate.error);
+        }
         log.trace({data: data}, 'Attempting to remove hashes.');
         async.waterfall([
             curry(multiexec)(getQuery(name, data)),
@@ -269,7 +340,11 @@ function createModel(model, options, client) {
     }
 
     function update(data, callback) {
-        data = data instanceof Array ? data : [data];
+        data = wrapArr(data);
+        var validate = updateSchema.validate(data);
+        if (validate.error) {
+            return callback(validate.error);
+        }
         log.trace({data: data}, 'Attempting to update hashes.');
         async.waterfall([
             curry(multiexec)(getQuery(name, map(data, 'id'))),
@@ -279,28 +354,32 @@ function createModel(model, options, client) {
     }
 
     function get(data, callback) {
+        data = wrapArr(data);
+        var validate = arrStrSchema.validate(data);
+        if (validate.error) {
+            return callback(validate.error);
+        }
         log.trace({data: data}, 'Attempting to get hashes by id.');
         multiexec(getQuery(name, data), callback);
     }
 
-    function search(field, term, callback) {
-        var start = '[' + term;
+    function search(data, callback) {
+        var validate = joi.validate(data, searchSchema);
+        if (validate.error) {
+            return callback(validate.error);
+        }
+        var start = '[' + data.term;
         var end = start + '\xff';
-        var key = makeKey(name, field, SYMBOLS.index);
-        log.trace({term: term, field: field}, 'Attempting to search for hash ids.');
-        async.waterfall([
+        var key = makeKey(name, data.field, SYMBOLS.index);
+        var funcs = [
             curry(zrangebylex)(key, start, end),
             parseSearch
-        ], callback);
-    }
-
-    function searchGet(field, term, callback) {
-        log.trace({term: term, field: field}, 'Attempting to search for hashes.');
-        async.waterfall([
-            curry(search)(term, field),
-            curry(searchToGet)(name),
-            multiexec
-        ], callback);
+        ];
+        if (data.get) {
+            funcs.push(curry(searchToGet)(name), multiexec);
+        }
+        log.trace(data, 'Attempting to search for hash ids.');
+        async.waterfall(funcs, callback);
     }
 
     that = {
@@ -308,8 +387,7 @@ function createModel(model, options, client) {
         remove: remove,
         update: update,
         get: get,
-        search: search,
-        searchGet: searchGet
+        search: search
     };
 
     log.trace('Creating new model.');

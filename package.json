@@ -8,6 +8,7 @@
   "license": "MPL-2.0",
   "dependencies": {
     "assert-plus": "^1.0.0",
+    "joi": "^10.1.0",
     "lodash.curry": "^4.1.1",
     "lodash.map": "^4.6.0",
     "pino": "^3.0.4",
