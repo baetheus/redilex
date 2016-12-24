@@ -12,8 +12,12 @@ var async = require('vasync');
 var assert = require('assert-plus');
 var curry = require('lodash.curry');
 var map = require('lodash.map');
-var log = require('pino')({name: 'redilex'});
 var joi = require('joi');
+var log = require('pino')({
+    name: 'redilex',
+    level: process.env.NODE_LEVEL || 'info'
+});
+
 
 var SYMBOLS = {
     index: 'i',
@@ -170,7 +174,9 @@ function seedHash(model, data) {
 }
 
 function seedHashes(model, data) {
-    return data.map(curry(seedHash)(model));
+    var seededData = data.map(curry(seedHash)(model));
+    log.trace({data: seededData}, 'Completed seeding.');
+    return seededData;
 }
 
 function serializeHash(model, data) {
@@ -182,6 +188,7 @@ function serializeHash(model, data) {
             cleanHash[key] = data[key];
         }
     });
+    return cleanHash;
 }
 
 /**
@@ -234,11 +241,13 @@ function hashAndIndex(name, model, hash, remove) {
 function createQuery(name, model, data) {
     var ids = [];
     var query = [];
+    log.trace('Creating queries..');
     data.forEach(function (hash) {
         ids.push(hash.id);
-        hash = serializeHash(hash);
+        hash = serializeHash(model, hash);
         query.push.apply(query, hashAndIndex(name, model, hash));
     });
+    log.trace({query: query}, 'Completed create query.');
     return {query: query, ids: ids};
 }
 
@@ -247,11 +256,11 @@ function removeQuery(name, model, data) {
     data.forEach(function (hash) {
         query.push.apply(query, hashAndIndex(name, model, hash, true));
     });
+    log.trace({query: query}, 'Completed remove query.');
     return query;
 }
 
 function getQuery(name, data) {
-    data = data instanceof Array ? data : [data];
     return data.map(function (id) {
         return hashGet(name, id);
     });
@@ -262,7 +271,7 @@ function updateQuery(name, model, data, oldData) {
     var query = [];
     data.forEach(function (hash, i) {
         ids.push(hash.id);
-        hash = serializeHash(hash);
+        hash = serializeHash(model, hash);
         var oldHash = pruneObj(hash, oldData[i]);
         query.push.apply(query, hashAndIndex(name, model, hash));
         query.push.apply(query, multiIndex(name, model, oldHash, true));
@@ -288,6 +297,11 @@ function parseSearch(data, callback) {
 
 function searchToGet(name, data, callback) {
     callback(null, getQuery(name, data));
+}
+
+function rollCallback(msg, callback, err, res) {
+    log.trace({err: err, res: res}, msg);
+    callback(err, res);
 }
 
 /** Primary Export */
@@ -332,17 +346,20 @@ function createModel(model, options, client) {
         data = seedHashes(model, wrapArr(data));
         var validate = createSchema.validate(data);
         if (validate.error) {
+            log.trace({validate: validate}, 'Failed schema validation.');
             return callback(validate.error);
         }
+        log.trace('Validated..');
         var image = createQuery(name, model, data);
         log.trace({query: image.query}, 'Running create query.');
-        multiexecimage(image, callback);
+        multiexecimage(image, curry(rollCallback)('Create Complete', callback));
     }
 
     function remove(data, callback) {
         data = wrapArr(data);
         var validate = arrStrSchema.validate(data);
         if (validate.error) {
+            log.trace({validate: validate}, 'Failed schema validation.');
             return callback(validate.error);
         }
         log.trace({data: data}, 'Attempting to remove hashes.');
@@ -350,13 +367,14 @@ function createModel(model, options, client) {
             curry(multiexec)(getQuery(name, data)),
             curry(getToRemove)(name, model),
             multiexec
-        ], callback);
+        ], curry(rollCallback)('Remove Complete', callback));
     }
 
     function update(data, callback) {
         data = wrapArr(data);
         var validate = updateSchema.validate(data);
         if (validate.error) {
+            log.trace({validate: validate}, 'Failed schema validation.');
             return callback(validate.error);
         }
         log.trace({data: data}, 'Attempting to update hashes.');
@@ -364,22 +382,24 @@ function createModel(model, options, client) {
             curry(multiexec)(getQuery(name, map(data, 'id'))),
             curry(getToUpdate)(name, model, data),
             multiexecimage
-        ], callback);
+        ], curry(rollCallback)('Create Complete', callback));
     }
 
     function get(data, callback) {
         data = wrapArr(data);
         var validate = arrStrSchema.validate(data);
         if (validate.error) {
+            log.trace({validate: validate}, 'Failed schema validation.');
             return callback(validate.error);
         }
         log.trace({data: data}, 'Attempting to get hashes by id.');
-        multiexec(getQuery(name, data), callback);
+        multiexec(getQuery(name, data), curry(rollCallback)('Create Complete', callback));
     }
 
     function search(data, callback) {
         var validate = joi.validate(data, searchSchema);
         if (validate.error) {
+            log.trace({validate: validate}, 'Failed schema validation.');
             return callback(validate.error);
         }
         var start = '[' + data.term;
@@ -393,7 +413,7 @@ function createModel(model, options, client) {
             funcs.push(curry(searchToGet)(name), multiexec);
         }
         log.trace(data, 'Attempting to search for hash ids.');
-        async.waterfall(funcs, callback);
+        async.waterfall(funcs, curry(rollCallback)('Create Complete', callback));
     }
 
     that = {
