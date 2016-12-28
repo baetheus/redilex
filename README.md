@@ -1,5 +1,5 @@
 #redilex
-A naive redis orm with lexical indexing. This module was created to add a small amount of syntactical sugar to the node-redis client. It uses a model approach to managing hash objects within redis. Additionally, it has some simple hash property flags such as ```lexical```, ```mutable```, and ```seed``` that make creating and searching for hashes a little easier.
+A naive redis orm with lexical indexing. This module was created to add syntactical sugar to the node-redis client. It uses a model approach to managing hash objects within redis. It enables single field lexical indexing, hash creation and update validation, and provides hooks to serialize or alter hash data prior to storage and before returning hashes to your client.
 
 ## Installation
 
@@ -13,22 +13,6 @@ var redilex = require('redilex');
 
 /**
  * Define the model for a hash.
- *
- * Redis hashes are a single level deep, so object values for fields aren't
- * handled automatically. Keep it simple here. Each object key represents a
- * redis hash field. Each field has three optional properties: seed, mutable,
- * and lexical. Seed is a function, string, or number that is seeded as a
- * default value on new hash creation (if a value is not supplied). Mutable
- * is a boolean value that defines whether the field can be updated or not
- * after creation (defaults to false). Lexical is a boolean value that defines
- * whether the field should be lexicographically indexed (defaults to false).
- *
- * NOTE: redilex will automatically add an id and a created field to every
- * model (if one is not defined). It is important that the id field is
- * UNIQUE within a single model, as it's used to define the internal redis
- * key of the hash. The id value can be replicated across different models,
- * however, as each model is namespaced. Basically, seed the id field at your
- * own peril.
  */
 var model = {
     name: {
@@ -36,7 +20,6 @@ var model = {
     },
     location: {
         seed: 'Home',
-        mutable: true
     },
     randNumber: {
         seed: Math.random
@@ -53,7 +36,7 @@ printPeople(err, data) {
 // Instantiate a new model object.
 var person = redilex.createModel(model, {name: 'person'});
 
-// Create a new hash with a name of Oscar and print the stored hash.
+// Create a new hash with a name of Oscar, then get and print the stored hash.
 person.create({name: 'Oscar'}, function (err, res) {
     if (err) { return console.error(err); }
     person.get(res, printPeople);
@@ -61,70 +44,199 @@ person.create({name: 'Oscar'}, function (err, res) {
 
 ```
 
-## Important Notes
-By default, redilex will add an *id* field and a *created* field. These fields can be overwritten by your model definition. The *id* field will be seeded with a random shortuuid provided by the shortid module. The *created* field will be seeded with the ```Date.now()``` function (a Unix timestamp).
-
-The model fields default to having no seed, and values of false for *mutable* and *lexical*.
-
-### The **seed** Property
-This property can be a string, number, or a function. The function will be called with no arguments. The output of the function or the supplied string or number will be seeded into the field during the creation of the object **ONLY** if the field is not contained in the create object already. If effectively functions as a default value on create.
-
-### The **mutable** Property
-This property defines whether the field can be updated. If set to false, then the field will be stripped from any update method calls.
-
-### The **lexical** Property
-This property defines whether the field should be lexicographically indexed. If set to *true* then the field can be used with the *search* method.
-
-## Methods
+## Root Method
 
 ### **redilex.createModel**(*model*, *options*, *client*)
 To create a model, at minimum you must provide an object describing the model and an options object containing a *name* property.
 
 Additionally, an existing redis client can be passed as the last argument, but if it is not passed, one will be instantiated.
 
-This method returns a model object with methods used to create, update, remove, get, search, and searchGet against that model.
+This method returns a model object with methods used to create, update, remove, get, and search against the model.
+
+#### The *model* parameter
+First, an example:
+
+```js
+// Require the joi module to customize schema validation.
+var joi = require('joi');
+
+var model = {
+    name: {
+        lexical: true,
+        validate: joi.string().required(),
+        updateValidate: joi.string()
+    },
+    email: {
+        lexical: true,
+        validate: joi.string().email().required(),
+        updateValidate: joi.string().email()
+    },
+    randNumber: {
+        seed: Math.random,
+        mutable: false,
+        validate: joi.number().required(),
+        updateValidate: joi.number()
+    },
+    someArray: {
+        validate: joi.array().items(joi.string()).required();
+        updateValidate: joi.array().items(joi.string());
+    }
+};
+```
+
+The model is an object literal. Each key in the object corresponds to a hash field in redis. Each key has the follow optional properties:
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| seed | String, Number, Function | None | This is a value or function that will be seeded into a field during object creation. It is only seeded if no value is supplied. |
+| lexical | Boolean | ```false``` | When set to true, redilex will lexicographically index this field. |
+| validate | Joi Object | ```Joi.any().required()``` | The joi object that is validated against this field when a new object is created. |
+| updateValidate | Joi Object | ```Joi.any()``` | The joi object that is validated against this field when an object is updated. |
+
+Redilex uses [Joi](https://github.com/hapijs/joi) to add schema validation support. Joi has a fairly extensive api. None of the field properties are required.
+
+#### The *options* parameter
+Again, an example:
+
+```js
+var options = {
+    name: 'people',
+    preCreate: serializeHash,
+    preUpdate: serializeHash,
+    postGet: deserializeHash
+}
+```
+
+The options parameter let's you set various options that are applied to all hashes based on the supplied model. Only the *name* sub-parameter is required. *preCreate*, *preUpdate*, and *postGet* are optional functions that can be used to modify hashes before they are created or updated, or after they are retrieved from redis. These functions will receive a single parameter, which is a complete hash object, and are expected to output a modified hash object. The primary use case for these functions is to allow you to serialize complex data types before they are stored in redis and to deserialize them when they are retrieved.
+
+Following are example serialize and deserialize functions based on the model in the model parameter section:
+
+```js
+var serialize = require('serialize-javascript');
+
+function serializeHash(hash) {
+    if ('someArray' in hash) {
+        hash.someArray = serialize(hash.someArray);
+    }
+    return hash;
+}
+
+function deserializeHash(hash) {
+    hash.someArray = eval('(' + hash.someArray + ')');
+    return hash;
+}
+```
+
+These functions would allow you to validate an array of strings within a hash field, store the array as serialized javascript in redis, and deserialize the array whenever the hash is returned. The *preCreate* and *preUpdate* functions are called after hashes are seeded and validated. The *postGet* function is called after hashes have been retrieved.
+
+## Model Methods
 
 ### [model].**create**(*data*, *callback*)
 This method creates a new hash or hashes in redis. The *data* argument takes either a new object to store, or an array of new objects to store.
 
 This method calls back with the idiomatic *callback(err, res)* where err contains any errors that occurred and res contains an array of new hash ids.
 
+Examples:
+
+```js
+// Create a single hash
+person.create({name: 'Jedidiah'}, printPeople);
+
+// Create multiple hashes
+person.create([{name: 'James'}, {name: 'Julian'}], printPeople);
+```
+
 ### [model].**remove**(*data*, *callback*)
 This method deletes an existing hash or hashes by id. The *data* argument takes either a single string representing the hash id to delete, or an array of ids to delete.
 
 This method calls back with the idiomatic *callback(err, res)* where err contains any errors that occurred and res contains the raw redis query response.
+
+Examples:
+
+```js
+var async = require('vasync');
+
+// Removes a single hash.
+person.remove('rkWkj65ZBx', printPeople);
+
+// Removes multiple hashes
+person.remove(['rkWkj65ZBx', 'ByeLi69WSl'], printPeople);
+
+// Search and remove with nested functions
+person.search({field: 'name', term: 'j'}, function (err, data) {
+    if (err) { return console.error(err); }
+    person.remove(data, printPeople);
+});
+
+// Search and remove using async.waterfall
+async.waterfall([
+    person.search.bind(undefined, {field: 'name', term: 'j'}),
+    person.remove
+], printPeople);
+```
 
 ### [model].**update**(*data*, *callback*)
 This method updates an existing hash or hashes in redis. The *data* argument takes either an object to update, or an array of objects to update. Every object that is being updated **MUST** have the id field populated correctly or this method will throw an error.
 
 This method calls back with the idiomatic *callback(err, res)* where err contains any errors that occurred and res contains an array of the updated hash ids.
 
+Examples:
+
+```js
+// Map Helper
+function makeBobById(id) {
+    return {
+        id: id,
+        name: 'Bob #' + id
+    };
+}
+
+// Removes a single hash.
+person.update({id: 'rkWkj65ZBx', name: 'Bob'}, printPeople);
+
+// Removes multiple hashes
+person.update([{id: 'rkWkj65ZBx', name: 'Jacob'}, {id: 'ByeLi69WSl', name: 'Linda'}], printPeople);
+
+// Search and update with nested functions
+person.search({field: 'name', term: 'j'}, function (err, data) {
+    if (err) { return console.error(err); }
+    person.update(data.map(makeBobById), printPeople);
+});
+```
+
 ### [model].**get**(*data*, *callback*)
 This method retrieves a hash or hashes from redis by id. The *data* argument takes either a single string representing the hash id to get, or an array of ids to get.
 
 This method calls back with the idiomatic *callback(err, res)* where err contains any errors that occurred and res contains an array of the retrieved hashes.
 
+Example:
+
+```js
+// Gets a single hash by id.
+person.get('rkWkj65ZBx', printPeople);
+
+// Gets multiple hashes by id.
+person.get(['rkWkj65ZBx', 'ByeLi69WSl'], printPeople);
+```
+
 ### [model].**search**(*data*, *callback*)
 The *data* argument is an object that requires at *term* string property and a *field* string property. It optionally accepts a *get* boolean property.
 
-This method searches for a hash or hashes from redis by *data.term* within *data.field*. The *data.field* argument is the field to search on. The *data.term* argument is the term to search for. A search is made from left to right, and does not match an arbitrary substring. Searches are case insensitive and will strip any ':' characters from *data.term*. This can be changed by altering the SYMBOLS object within the redilex module. Later on I may pull this into the options object. By default, search will return an array of matching model ids. If the *data.get* property is set to ```true```, then it will instead return an array of all matching hashes.
-
-For Example:
-
-    person.search('name', 'osc', cbHandler);
-
-This will match the hash created in Basic Use.
-
-    person.search('name', 'car', cbHandler);
-
-This will *not* match the hash created in Basic Use.
+This method searches for a hash or hashes from redis by *data.term* within *data.field*. The *data.field* argument is the field to search on. The *data.term* argument is the term to search for. A search is made from left to right, and does not match an arbitrary substring. Searches are case insensitive and will strip any ':' characters from *data.term*. By default, search will return an array of matching model ids. If the *data.get* property is set to ```true```, then it will instead return an array of all matching hashes.
 
 This method calls back with the idiomatic *callback(err, res)* where err contains any errors that occurred and res contains an array of matching hashes.
 
-## Schema Manipulation
-By default, all fields specified in the model supplied to **redilex.createModel**(*model*, *options*, *client*) are required during the creation of new hashes. Additionally, redilex will require that the id field always be supplied when updating hashes. If this is not the case, an ```ValidationError``` will be returned with the callback. If any extraneous fields not defined by the model are included in any data, they will also cause redilex to return an error.
+Examples:
 
-These errors are generated by [Joi](https://github.com/hapijs/joi) internally, using schemas that are created along side the model. If you wish to use custom Joi schemas on creation or update, you ca manipulate the *options* object. Specifically, you may pass a Joi schema for hash creation to *options.mSchema* and a Joi schema for hash update to *options.uSchema*. These schemas are used to validate hash data for their respective redilex methods.
+```js
+// This will print an array of matching hash ids, but not the full hashes.
+person.search({field: 'name', term: 'j'}, printPeople);
+
+// This will print an array of matching hashes in full.
+person.search({field: 'name', term: 'j', get: true}, printPeople);
+```
+
+Note: If you search on a field that is not indexed the result will be an empty array. No error is returned. This is by design, so pay attention when you are searching.
 
 ## Contact
 If you have any questions, they can be directed to brandon@null.pub. Thanks for your interest!
