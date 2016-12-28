@@ -1,7 +1,14 @@
 {
   "name": "redilex",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "A naive redis orm with lexical indexing.",
+  "keywords": [
+    "redis",
+    "lexical",
+    "indexing",
+    "orm",
+    "hashes"
+  ],
   "main": "index.js",
   "repository": "https://github.com/baetheus/redilex.git",
   "author": "Brandon Blaylock (brandon@null.pub)",

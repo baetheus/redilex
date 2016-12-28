@@ -149,7 +149,7 @@ function formatModel(model) {
         if (output[key].seed) {
             output[key].seed = formatSeed(output[key].seed);
         }
-        output[key].mutable = setDefault(output[key].mutable, false);
+        output[key].mutable = setDefault(output[key].mutable, true);
         output[key].lexical = setDefault(output[key].lexical, false);
         joi.validate(output[key], propSchema, function (err, value) {
             if (err) { throw err; }
