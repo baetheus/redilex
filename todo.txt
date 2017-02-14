@@ -1,0 +1,5 @@
+# TODO
+
+* Add limit and offset fields to search command. (Note: Adds worst case O(N) complexity)
+* Write the damn unit tests
+* Update documentation: correct spelling errors, clarify promise usage, give it the once over.
